@@ -23,7 +23,11 @@
 
 $string["mojec"] = "JUnit Exercise Corrector Resend Option";
 $string["pluginname"] = "JUnit Exercise Corrector Feedback";
-$string["resenduntested"] = "Resend untested submissions";
-$string["batchresenduntestedforusers"] = "Resend untested submission to {$a} selected user(s).";
-$string["batchresenduntested"] = "Resend untested submissions for multiple users";
+$string["testuntestedaction"] = "Test untested submissions";
+$string["batchtestforusers"] = "Test submissions for {$a} selected user(s).";
+$string["batchtest"] = "Test submissions for multiple users";
+$string["testuntestedforusers"] = "Test untested submissions for {$a} user(s).";
+$string["testuntested"] = "Test submissions for multiple users";
 $string["selectedusers"] = "Selected users";
+$string["batchtestaction"] = "Test selected submissions";
+$string["batchoperationconfirmbatchtestaction"] = "Test selected submissions?";

@@ -33,7 +33,26 @@ defined('MOODLE_INTERNAL') || die();
  */
 class assign_feedback_mojec extends assign_feedback_plugin {
 
+    // Database table names.
+    const TABLE_ASSIGNSUBMISSION_MOJEC = "assignsubmission_mojec";
+    const TABLE_MOJEC_TESTRESULT = "mojec_testresult";
+    const TABLE_MOJEC_TESTFAILURE = "mojec_testfailure";
+    const TABLE_MOJEC_COMPILATIONERROR = "mojec_compilationerror";
+
     const COMPONENT_NAME = "assignfeedback_mojec";
+
+    /**
+     * Get mojec submission information from the database
+     *
+     * @param int $assignmentid
+     * @param int $submissionid
+     * @return mixed
+     */
+    private function get_mojec_submission($assignmentid, $submissionid) {
+        global $DB;
+        return $DB->get_record(self::TABLE_ASSIGNSUBMISSION_MOJEC,
+            array("assignment_id" => $assignmentid, "submission_id" => $submissionid));
+    }
 
     /**
      * Get the name of the mojec feedback plugin.
@@ -52,12 +71,26 @@ class assign_feedback_mojec extends assign_feedback_plugin {
      * @return string - The html response
      */
     public function view_page($action) {
-        if ($action == 'resenduntested') {
+        if ($action == "batchtestaction") {
+            $users = required_param("selectedusers", PARAM_SEQUENCE);
+            return $this->view_batch_test(explode(",", $users));
+        } else if ($action == "testuntestedaction") {
             $users = $this->get_students_without_test_results();
             return $this->view_resend_untested($users);
         }
 
-        return '';
+        return "";
+    }
+
+    /**
+     * Return a list of the batch grading operations supported by this plugin.
+     * This plugins supports batch resend of the task files to the backend web service.
+     *
+     * @return array - An array of action and description strings.
+     *                 The action will be passed to grading_batch_operation.
+     */
+    public function get_grading_batch_operations() {
+        return array("batchtestaction" => get_string("batchtestaction", self::COMPONENT_NAME));
     }
 
     /**
@@ -66,7 +99,22 @@ class assign_feedback_mojec extends assign_feedback_plugin {
      * @return array The list of grading actions
      */
     public function get_grading_actions() {
-        return array("resenduntested" => get_string("resenduntested", self::COMPONENT_NAME));
+        return array("testuntestedaction" => get_string("testuntestedaction", self::COMPONENT_NAME));
+    }
+
+    /**
+     * User has chosen a custom grading batch operation and selected some users.
+     *
+     * @param string $action - The chosen action
+     * @param array $users - An array of user ids
+     * @return string - The response html
+     */
+    public function grading_batch_operation($action, $users) {
+
+        if ($action == 'batchtestaction') {
+            return $this->view_batch_test($users);
+        }
+        return '';
     }
 
     private function get_students_without_test_results() {
@@ -97,7 +145,7 @@ class assign_feedback_mojec extends assign_feedback_plugin {
     private function view_resend_untested($users) {
         global $DB, $CFG;
 
-        require_once($CFG->dirroot . '/mod/assign/feedback/mojec/resenduntestedform.php');
+        require_once($CFG->dirroot . '/mod/assign/feedback/mojec/testuntestedform.php');
         require_once($CFG->dirroot . '/mod/assign/renderable.php');
 
 
@@ -124,7 +172,7 @@ class assign_feedback_mojec extends assign_feedback_plugin {
 
         $formparams['usershtml'] = $usershtml;
 
-        $mform = new assignfeedback_mojec_resend_untested_form(null, $formparams);
+        $mform = new assignfeedback_mojec_test_untested_form(null, $formparams);
 
         if ($mform->is_cancelled()) {
             redirect(new moodle_url('view.php',
@@ -132,7 +180,69 @@ class assign_feedback_mojec extends assign_feedback_plugin {
                     'action' => 'grading')));
             return "";
         } else if ($data = $mform->get_data()) {
+            $fs = get_file_storage();
+
+            $assignmentid = $this->assignment->get_instance()->id;
             foreach ($users as $userid) {
+                $submission = $this->assignment->get_user_submission($userid, false, -1);
+                if (empty($submission)) {
+                    continue;
+                }
+                $mojecsubmission = $this->get_mojec_submission($assignmentid, $submission->id);
+                $file = $fs->get_file_by_hash($mojecsubmission->pathnamehash);
+                if (empty($file)) {
+                    continue;
+                }
+
+                $wsbaseaddress = get_config("assignsubmission_mojec", "wsbase");
+                if (empty($wsbaseaddress)) {
+                    \core\notification::error(get_string("wsbase_not_set", self::COMPONENT_NAME));
+                    return true;
+                }
+
+                // Post file to our backend.
+                $url = $wsbaseaddress . "/v1/task";
+                $response = $this->mojec_post_file($file, $url, "taskFile");
+
+                $results = json_decode($response);
+                $testresults = $results->testResults;
+                foreach ($testresults as $tr) {
+                    // Test result.
+                    $testresult = new stdClass();
+                    $testresult->testname = $tr->testName;
+                    $testresult->testcount = $tr->testCount;
+                    $testresult->succtests = implode(",", $tr->successfulTests);
+                    $testresult->mojec_id = $mojecsubmission->id;
+
+                    $testresult->id = $DB->insert_record(self::TABLE_MOJEC_TESTRESULT, $testresult);
+
+                    // Test failure.
+                    $testfailures = $tr->testFailures;
+                    foreach ($testfailures as $tf) {
+                        $testfailure = new stdClass();
+                        $testfailure->testheader = $tf->testHeader;
+                        $testfailure->message = $tf->message;
+                        $testfailure->trace = $tf->trace;
+                        $testfailure->testresult_id = $testresult->id;
+
+                        $testfailure->id = $DB->insert_record(self::TABLE_MOJEC_TESTFAILURE, $testfailure);
+                    }
+                }
+
+                $compilationerrors = $results->compilationErrors;
+                foreach ($compilationerrors as $ce) {
+                    // Compilation error.
+                    $compilationerror = new stdClass();
+                    $compilationerror->columnnumber = $ce->columnNumber;
+                    $compilationerror->linenumber = $ce->lineNumber;
+                    $compilationerror->message = $ce->message;
+                    $compilationerror->position = $ce->position;
+                    $compilationerror->filename = $ce->javaFileName;
+                    $compilationerror->mojec_id = $mojecsubmission->id;
+
+                    $compilationerror->id = $DB->insert_record(self::TABLE_MOJEC_COMPILATIONERROR, $compilationerror);
+                }
+
             }
 
             redirect(new moodle_url('view.php',
@@ -145,14 +255,177 @@ class assign_feedback_mojec extends assign_feedback_plugin {
                 $this->assignment->get_context(),
                 false,
                 $this->assignment->get_course_module()->id,
-                get_string('batchresenduntested', 'assignfeedback_mojec'));
+                get_string('testuntested', 'assignfeedback_mojec'));
             $o = '';
             $o .= $this->assignment->get_renderer()->render($header);
-            $o .= $this->assignment->get_renderer()->render(new assign_form('batchresenduntested', $mform));
+            $o .= $this->assignment->get_renderer()->render(new assign_form('testuntested', $mform));
             $o .= $this->assignment->get_renderer()->render_footer();
         }
 
         return $o;
+    }
+
+    private function view_batch_test($users) {
+        global $DB, $CFG;
+
+        require_once($CFG->dirroot . '/mod/assign/feedback/mojec/batchtestform.php');
+        require_once($CFG->dirroot . '/mod/assign/renderable.php');
+
+
+        $formparams = array('cm' => $this->assignment->get_course_module()->id,
+            'users' => $users,
+            'context' => $this->assignment->get_context());
+
+        $usershtml = '';
+
+        $usercount = 0;
+        foreach ($users as $userid) {
+            $user = $DB->get_record('user', array('id' => $userid), '*', MUST_EXIST);
+
+            $usersummary = new assign_user_summary($user,
+                $this->assignment->get_course()->id,
+                has_capability('moodle/site:viewfullnames',
+                    $this->assignment->get_course_context()),
+                $this->assignment->is_blind_marking(),
+                $this->assignment->get_uniqueid_for_user($user->id),
+                get_extra_user_fields($this->assignment->get_context()));
+            $usershtml .= $this->assignment->get_renderer()->render($usersummary);
+            $usercount += 1;
+        }
+
+        $formparams['usershtml'] = $usershtml;
+
+        $mform = new assignfeedback_mojec_batch_test_form(null, $formparams);
+
+        if ($mform->is_cancelled()) {
+            redirect(new moodle_url('view.php',
+                array('id' => $this->assignment->get_course_module()->id,
+                    'action' => 'grading')));
+            return "";
+        } else if ($data = $mform->get_data()) {
+            $fs = get_file_storage();
+
+            $assignmentid = $this->assignment->get_instance()->id;
+            foreach ($users as $userid) {
+                $submission = $this->assignment->get_user_submission($userid, false, -1);
+                if (empty($submission)) {
+                    continue;
+                }
+                $mojecsubmission = $this->get_mojec_submission($assignmentid, $submission->id);
+                $file = $fs->get_file_by_hash($mojecsubmission->pathnamehash);
+                if (empty($file)) {
+                    continue;
+                }
+
+                $wsbaseaddress = get_config("assignsubmission_mojec", "wsbase");
+                if (empty($wsbaseaddress)) {
+                    \core\notification::error(get_string("wsbase_not_set", self::COMPONENT_NAME));
+                    return true;
+                }
+
+                // Post file to our backend.
+                $url = $wsbaseaddress . "/v1/task";
+                $response = $this->mojec_post_file($file, $url, "taskFile");
+
+                $results = json_decode($response);
+                $testresults = $results->testResults;
+                foreach ($testresults as $tr) {
+                    // Test result.
+                    $testresult = new stdClass();
+                    $testresult->testname = $tr->testName;
+                    $testresult->testcount = $tr->testCount;
+                    $testresult->succtests = implode(",", $tr->successfulTests);
+                    $testresult->mojec_id = $mojecsubmission->id;
+
+                    $testresult->id = $DB->insert_record(self::TABLE_MOJEC_TESTRESULT, $testresult);
+
+                    // Test failure.
+                    $testfailures = $tr->testFailures;
+                    foreach ($testfailures as $tf) {
+                        $testfailure = new stdClass();
+                        $testfailure->testheader = $tf->testHeader;
+                        $testfailure->message = $tf->message;
+                        $testfailure->trace = $tf->trace;
+                        $testfailure->testresult_id = $testresult->id;
+
+                        $testfailure->id = $DB->insert_record(self::TABLE_MOJEC_TESTFAILURE, $testfailure);
+                    }
+                }
+
+                $compilationerrors = $results->compilationErrors;
+                foreach ($compilationerrors as $ce) {
+                    // Compilation error.
+                    $compilationerror = new stdClass();
+                    $compilationerror->columnnumber = $ce->columnNumber;
+                    $compilationerror->linenumber = $ce->lineNumber;
+                    $compilationerror->message = $ce->message;
+                    $compilationerror->position = $ce->position;
+                    $compilationerror->filename = $ce->javaFileName;
+                    $compilationerror->mojec_id = $mojecsubmission->id;
+
+                    $compilationerror->id = $DB->insert_record(self::TABLE_MOJEC_COMPILATIONERROR, $compilationerror);
+                }
+
+            }
+
+            redirect(new moodle_url('view.php',
+                array('id' => $this->assignment->get_course_module()->id,
+                    'action' => 'grading')));
+            return "";
+        } else {
+
+            $header = new assign_header($this->assignment->get_instance(),
+                $this->assignment->get_context(),
+                false,
+                $this->assignment->get_course_module()->id,
+                get_string('batchtest', 'assignfeedback_mojec'));
+            $o = '';
+            $o .= $this->assignment->get_renderer()->render($header);
+            $o .= $this->assignment->get_renderer()->render(new assign_form('batchtest', $mform));
+            $o .= $this->assignment->get_renderer()->render_footer();
+        }
+
+        return $o;
+    }
+
+    /**
+     * Posts the file to the url under the given param name.
+     *
+     * @param stored_file $file the file to post.
+     * @param string $url the url to post to.
+     * @param string $paramname the param name for the file.
+     * @return mixed
+     */
+    private function mojec_post_file($file, $url, $paramname) {
+        if (!isset($file) or !isset($url) or !isset($paramname)) {
+            return false;
+        }
+
+        $params = array(
+            $paramname     => $file,
+            "assignmentId" => $this->assignment->get_instance()->id
+        );
+        $options = array(
+            "CURLOPT_RETURNTRANSFER" => true
+        );
+        $curl = new curl();
+        $response = $curl->post($url, $params, $options);
+
+        $info = $curl->get_info();
+        if ($info["http_code"] == 200) {
+            return $response;
+        }
+
+        // Something went wrong.
+        debugging("MoJEC: Post file to server was not successful: http_code=" . $info["http_code"]);
+
+        if ($info['http_code'] == 400) {
+            \core\notification::error(get_string("badrequesterror", self::COMPONENT_NAME));
+            return false;
+        } else {
+            \core\notification::error(get_string("unexpectederror", self::COMPONENT_NAME));
+            return false;
+        }
     }
 
 }

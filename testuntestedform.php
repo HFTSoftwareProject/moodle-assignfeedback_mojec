@@ -25,7 +25,7 @@ require_once($CFG->dirroot . '/mod/assign/feedback/mojec/locallib.php');
  * @package   assignfeedback_mojec
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class assignfeedback_mojec_resend_untested_form extends moodleform {
+class assignfeedback_mojec_test_untested_form extends moodleform {
     /**
      * Define this form - called by the parent constructor
      */
@@ -35,15 +35,15 @@ class assignfeedback_mojec_resend_untested_form extends moodleform {
         $mform = $this->_form;
         $params = $this->_customdata;
 
-        $mform->addElement('header', 'batchresenduntestedforusers',
-            get_string('batchresenduntestedforusers', 'assignfeedback_mojec', count($params['users'])));
+        $mform->addElement('header', 'testuntestedforusers',
+            get_string('testuntestedforusers', 'assignfeedback_mojec', count($params['users'])));
         $mform->addElement('static', 'userslist', get_string('selectedusers', 'assignfeedback_mojec'), $params['usershtml']);
 
         $mform->addElement('hidden', 'id', $params['cm']);
         $mform->setType('id', PARAM_INT);
         $mform->addElement('hidden', 'action', 'viewpluginpage');
         $mform->setType('action', PARAM_ALPHA);
-        $mform->addElement('hidden', 'pluginaction', 'resenduntested');
+        $mform->addElement('hidden', 'pluginaction', 'testuntestedaction');
         $mform->setType('pluginaction', PARAM_ALPHA);
         $mform->addElement('hidden', 'plugin', 'mojec');
         $mform->setType('plugin', PARAM_PLUGIN);
@@ -51,7 +51,7 @@ class assignfeedback_mojec_resend_untested_form extends moodleform {
         $mform->setType('pluginsubtype', PARAM_PLUGIN);
         $mform->addElement('hidden', 'selectedusers', implode(',', $params['users']));
         $mform->setType('selectedusers', PARAM_SEQUENCE);
-        $this->add_action_buttons(true, get_string('resenduntested', 'assignfeedback_mojec'));
+        $this->add_action_buttons(true, get_string('testuntestedaction', 'assignfeedback_mojec'));
 
     }
 
