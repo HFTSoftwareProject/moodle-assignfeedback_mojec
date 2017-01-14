@@ -31,3 +31,4 @@ $string["testuntested"] = "Test submissions for multiple users";
 $string["selectedusers"] = "Selected users";
 $string["batchtestaction"] = "Test selected submissions";
 $string["batchoperationconfirmbatchtestaction"] = "Test selected submissions?";
+$string["wsbase_not_set"] = "The JUnit Exercise Corrector web service base URL is not configured.";

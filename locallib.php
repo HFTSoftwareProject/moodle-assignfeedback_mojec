@@ -201,47 +201,12 @@ class assign_feedback_mojec extends assign_feedback_plugin {
                 }
 
                 // Post file to our backend.
-                $url = $wsbaseaddress . "/v1/task";
-                $response = $this->mojec_post_file($file, $url, "taskFile");
+                $assignmentid = $this->assignment->get_instance()->id;
+                $becommun = new assignsubmission_mojec_backend_communication($wsbaseaddress);
+                $response = $becommun->mojec_post_task_file($file, $assignmentid);
 
-                $results = json_decode($response);
-                $testresults = $results->testResults;
-                foreach ($testresults as $tr) {
-                    // Test result.
-                    $testresult = new stdClass();
-                    $testresult->testname = $tr->testName;
-                    $testresult->testcount = $tr->testCount;
-                    $testresult->succtests = implode(",", $tr->successfulTests);
-                    $testresult->mojec_id = $mojecsubmission->id;
-
-                    $testresult->id = $DB->insert_record(self::TABLE_MOJEC_TESTRESULT, $testresult);
-
-                    // Test failure.
-                    $testfailures = $tr->testFailures;
-                    foreach ($testfailures as $tf) {
-                        $testfailure = new stdClass();
-                        $testfailure->testheader = $tf->testHeader;
-                        $testfailure->message = $tf->message;
-                        $testfailure->trace = $tf->trace;
-                        $testfailure->testresult_id = $testresult->id;
-
-                        $testfailure->id = $DB->insert_record(self::TABLE_MOJEC_TESTFAILURE, $testfailure);
-                    }
-                }
-
-                $compilationerrors = $results->compilationErrors;
-                foreach ($compilationerrors as $ce) {
-                    // Compilation error.
-                    $compilationerror = new stdClass();
-                    $compilationerror->columnnumber = $ce->columnNumber;
-                    $compilationerror->linenumber = $ce->lineNumber;
-                    $compilationerror->message = $ce->message;
-                    $compilationerror->position = $ce->position;
-                    $compilationerror->filename = $ce->javaFileName;
-                    $compilationerror->mojec_id = $mojecsubmission->id;
-
-                    $compilationerror->id = $DB->insert_record(self::TABLE_MOJEC_COMPILATIONERROR, $compilationerror);
-                }
+                $jsonresponse = json_decode($response);
+                assign_submission_mojec::process_json_response($jsonresponse, $mojecsubmission->id);
 
             }
 
@@ -270,7 +235,6 @@ class assign_feedback_mojec extends assign_feedback_plugin {
 
         require_once($CFG->dirroot . '/mod/assign/feedback/mojec/batchtestform.php');
         require_once($CFG->dirroot . '/mod/assign/renderable.php');
-
 
         $formparams = array('cm' => $this->assignment->get_course_module()->id,
             'users' => $users,
@@ -317,6 +281,16 @@ class assign_feedback_mojec extends assign_feedback_plugin {
                     continue;
                 }
 
+                if ($mojecsubmission) {
+                    // If there are old results, delete them.
+                    assign_submission_mojec::delete_test_data($mojecsubmission->id);
+                } else {
+                    $mojecsubmission = new stdClass();
+                    $mojecsubmission->submission_id = $submission->id;
+                    $mojecsubmission->assignment_id = $this->assignment->get_instance()->id;
+                    $mojecsubmission->id = $DB->insert_record(self::TABLE_ASSIGNSUBMISSION_MOJEC, $mojecsubmission);
+                }
+
                 $wsbaseaddress = get_config("assignsubmission_mojec", "wsbase");
                 if (empty($wsbaseaddress)) {
                     \core\notification::error(get_string("wsbase_not_set", self::COMPONENT_NAME));
@@ -325,46 +299,12 @@ class assign_feedback_mojec extends assign_feedback_plugin {
 
                 // Post file to our backend.
                 $url = $wsbaseaddress . "/v1/task";
-                $response = $this->mojec_post_file($file, $url, "taskFile");
+                $assignmentid = $this->assignment->get_instance()->id;
+                $becommun = new assignsubmission_mojec_backend_communication($wsbaseaddress);
+                $response = $becommun->mojec_post_task_file($file, $assignmentid);
 
-                $results = json_decode($response);
-                $testresults = $results->testResults;
-                foreach ($testresults as $tr) {
-                    // Test result.
-                    $testresult = new stdClass();
-                    $testresult->testname = $tr->testName;
-                    $testresult->testcount = $tr->testCount;
-                    $testresult->succtests = implode(",", $tr->successfulTests);
-                    $testresult->mojec_id = $mojecsubmission->id;
-
-                    $testresult->id = $DB->insert_record(self::TABLE_MOJEC_TESTRESULT, $testresult);
-
-                    // Test failure.
-                    $testfailures = $tr->testFailures;
-                    foreach ($testfailures as $tf) {
-                        $testfailure = new stdClass();
-                        $testfailure->testheader = $tf->testHeader;
-                        $testfailure->message = $tf->message;
-                        $testfailure->trace = $tf->trace;
-                        $testfailure->testresult_id = $testresult->id;
-
-                        $testfailure->id = $DB->insert_record(self::TABLE_MOJEC_TESTFAILURE, $testfailure);
-                    }
-                }
-
-                $compilationerrors = $results->compilationErrors;
-                foreach ($compilationerrors as $ce) {
-                    // Compilation error.
-                    $compilationerror = new stdClass();
-                    $compilationerror->columnnumber = $ce->columnNumber;
-                    $compilationerror->linenumber = $ce->lineNumber;
-                    $compilationerror->message = $ce->message;
-                    $compilationerror->position = $ce->position;
-                    $compilationerror->filename = $ce->javaFileName;
-                    $compilationerror->mojec_id = $mojecsubmission->id;
-
-                    $compilationerror->id = $DB->insert_record(self::TABLE_MOJEC_COMPILATIONERROR, $compilationerror);
-                }
+                $jsonresponse = json_decode($response);
+                assign_submission_mojec::process_json_response($jsonresponse, $mojecsubmission->id);
 
             }
 
@@ -386,46 +326,6 @@ class assign_feedback_mojec extends assign_feedback_plugin {
         }
 
         return $o;
-    }
-
-    /**
-     * Posts the file to the url under the given param name.
-     *
-     * @param stored_file $file the file to post.
-     * @param string $url the url to post to.
-     * @param string $paramname the param name for the file.
-     * @return mixed
-     */
-    private function mojec_post_file($file, $url, $paramname) {
-        if (!isset($file) or !isset($url) or !isset($paramname)) {
-            return false;
-        }
-
-        $params = array(
-            $paramname     => $file,
-            "assignmentId" => $this->assignment->get_instance()->id
-        );
-        $options = array(
-            "CURLOPT_RETURNTRANSFER" => true
-        );
-        $curl = new curl();
-        $response = $curl->post($url, $params, $options);
-
-        $info = $curl->get_info();
-        if ($info["http_code"] == 200) {
-            return $response;
-        }
-
-        // Something went wrong.
-        debugging("MoJEC: Post file to server was not successful: http_code=" . $info["http_code"]);
-
-        if ($info['http_code'] == 400) {
-            \core\notification::error(get_string("badrequesterror", self::COMPONENT_NAME));
-            return false;
-        } else {
-            \core\notification::error(get_string("unexpectederror", self::COMPONENT_NAME));
-            return false;
-        }
     }
 
 }
